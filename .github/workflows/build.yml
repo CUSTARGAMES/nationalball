@@ -88,53 +88,37 @@ jobs:
     - name: Upload artifact (macOS)
       uses: actions/upload-artifact@v3
       with:
-        name: nationalball-macos
-        path: nationalball
+  name: Build Nationalball (Windows)
 
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
   release:
-    needs: [build-linux, build-windows, build-macos]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    types: [ created ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/download-artifact@v3
-      with:
-        path: artifacts
+    - uses: actions/checkout@v4
     
-    - name: Create release packages
+    - name: Download Raylib (Windows)
       run: |
-        mkdir release
-        cp artifacts/nationalball-linux/nationalball release/nationalball-linux
-        cp artifacts/nationalball-windows/nationalball.exe release/nationalball-windows.exe
-        cp artifacts/nationalball-macos/nationalball release/nationalball-macos
-        tar -czf nationalball-linux.tar.gz -C release nationalball-linux
-        zip nationalball-windows.zip -j release/nationalball-windows.exe
-        tar -czf nationalball-macos.tar.gz -C release nationalball-macos
+        Invoke-WebRequest -Uri "https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_win64_msvc16.zip" -OutFile "raylib.zip"
+        Expand-Archive -Path raylib.zip -DestinationPath .
+        mkdir include
+        mkdir lib
+        Copy-Item -Path "raylib-5.0_win64_msvc16\include\*" -Destination "include\" -Recurse
+        Copy-Item -Path "raylib-5.0_win64_msvc16\lib\*" -Destination "lib\" -Recurse
     
-    - name: Upload to release
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build game
+      run: |
+        g++ -O2 -o nationalball.exe nationalball.cpp -Iinclude -Llib -lraylib -lgdi32 -lwinmm
+    
+    - name: Upload artifact (Windows)
+      uses: actions/upload-artifact@v4  # ✅ Updated to v4
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: nationalball-linux.tar.gz
-        asset_name: nationalball-linux.tar.gz
-        asset_content_type: application/gzip
-    - name: Upload Windows build
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: nationalball-windows.zip
-        asset_name: nationalball-windows.zip
-        asset_content_type: application/zip
-    - name: Upload macOS build
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: nationalball-macos.tar.gz
-        asset_name: nationalball-macos.tar.gz
-        asset_content_type: application/gzip
+        name: nationalball-windows
+        path: nationalball.exe
