@@ -1,4 +1,4 @@
-name: Build Nationalball (Raylib)
+name: Build Nationalball (Simple OpenGL)
 
 on:
   push:
@@ -21,20 +21,31 @@ jobs:
         mkdir include
         mkdir lib
     
-    - name: Download Raylib (MinGW version)
+    - name: Install MinGW
       run: |
-        Invoke-WebRequest -Uri "https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_win64_mingw-w64.zip" -OutFile "raylib.zip"
-        Expand-Archive -Path raylib.zip -DestinationPath .
-        Move-Item -Path "raylib-5.0_win64_mingw-w64\include\*" -Destination "include\" -Force
-        Move-Item -Path "raylib-5.0_win64_mingw-w64\lib\*" -Destination "lib\" -Force
-        echo "Raylib downloaded"
-        dir lib
+        choco install mingw -y
+        echo "C:\mingw64\bin" >> $env:GITHUB_PATH
     
-    - name: Compile game
+    - name: Download GLFW
       run: |
-        echo "Compiling..."
+        Invoke-WebRequest -Uri "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip" -OutFile "glfw.zip"
+        Expand-Archive -Path glfw.zip -DestinationPath .
+        Move-Item -Path "glfw-3.4.bin.WIN64\include\*" -Destination "include\" -Force
+        Copy-Item -Path "glfw-3.4.bin.WIN64\lib-mingw-w64\*.a" -Destination "lib\" -Force
+        echo "GLFW downloaded"
+    
+    - name: Download GLM
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/g-truc/glm/releases/download/1.0.1/glm-1.0.1-light.zip" -OutFile "glm.zip"
+        Expand-Archive -Path glm.zip -DestinationPath .
+        Move-Item -Path "glm\glm" -Destination "include\glm" -Force
+        echo "GLM downloaded"
+    
+    - name: Compile game (no GLEW)
+      run: |
+        echo "Compiling with OpenGL + GLFW..."
         g++ --version
-        g++ -O2 -static -o nationalball.exe nationalball.cpp -Iinclude -Llib -lraylib -lopengl32 -lgdi32 -lwinmm -lpthread -ldl
+        g++ -O2 -static -o nationalball.exe nationalball.cpp -Iinclude -Llib -lglfw3 -lopengl32 -lgdi32 -lwinmm -lpthread -ldl
         echo "Build complete!"
         dir *.exe
     
