@@ -43,11 +43,12 @@ jobs:
         Copy-Item -Path "glew-2.2.0\lib\Release\Win32\*.a" -Destination "lib\" -Force
         echo "✅ GLEW downloaded"
     
-    - name: Download TinyGLTF and json.hpp
+    - name: Download TinyGLTF and dependencies
       run: |
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/syoyo/tinygltf/master/tiny_gltf.h" -OutFile "include\tiny_gltf.h"
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/nlohmann/json/develop/single_include/nlohmann/json.hpp" -OutFile "include\json.hpp"
-        echo "✅ TinyGLTF and json.hpp downloaded"
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/nothings/stb/master/stb_image.h" -OutFile "include\stb_image.h"
+        echo "✅ TinyGLTF, json.hpp, and stb_image.h downloaded"
     
     - name: Compile game
       run: |
