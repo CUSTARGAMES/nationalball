@@ -1,15 +1,15 @@
-// game.cpp - Nationalball 3D Model Viewer
-// GPL v3 License - Pure OpenGL + GLFW + Assimp
+// game.cpp - Nationalball 3D GLB Viewer with TinyGLTF
+// GPL v3 License - Pure OpenGL + GLFW + TinyGLTF
+
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#include "tiny_gltf.h"
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <fstream>
 #include <string>
 
 #define SCREEN_WIDTH 1280
@@ -70,17 +70,6 @@ Mat4 scale(const Vec3& v) {
     return result;
 }
 
-Mat4 rotateY(float angle) {
-    Mat4 result;
-    float c = cosf(angle);
-    float s = sinf(angle);
-    result.m[0] = c;
-    result.m[2] = s;
-    result.m[8] = -s;
-    result.m[10] = c;
-    return result;
-}
-
 Mat4 operator*(const Mat4& a, const Mat4& b) {
     Mat4 result;
     for(int i=0; i<4; i++) {
@@ -119,17 +108,20 @@ layout (location = 1) in vec3 aNormal;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform vec3 objectColor;
+out vec3 FragColor;
 void main() {
     gl_Position = projection * view * model * vec4(aPos, 1.0);
+    FragColor = objectColor;
 }
 )";
 
 const char* fragmentShaderSource = R"(
 #version 330 core
-uniform vec3 color;
-out vec4 FragColor;
+in vec3 FragColor;
+out vec4 OutColor;
 void main() {
-    FragColor = vec4(color, 1.0);
+    OutColor = vec4(FragColor, 1.0);
 }
 )";
 
@@ -172,21 +164,7 @@ struct Mesh {
     std::vector<unsigned int> indices;
     GLuint VAO, VBO, EBO;
     Vec3 color;
-    
-    void LoadFromAssimp(aiMesh* mesh) {
-        for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
-            vertices.push_back(mesh->mVertices[i].x);
-            vertices.push_back(mesh->mVertices[i].y);
-            vertices.push_back(mesh->mVertices[i].z);
-        }
-        for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
-            aiFace face = mesh->mFaces[i];
-            for (unsigned int j = 0; j < face.mNumIndices; j++) {
-                indices.push_back(face.mIndices[j]);
-            }
-        }
-        SetupGL();
-    }
+    int vertexCount;
     
     void SetupGL() {
         glGenVertexArrays(1, &VAO);
@@ -205,6 +183,7 @@ struct Mesh {
         
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
+        vertexCount = indices.size();
     }
     
     void Draw(GLuint shader, Mat4 model, Mat4 view, Mat4 projection) {
@@ -212,34 +191,139 @@ struct Mesh {
         glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, model.m);
         glUniformMatrix4fv(glGetUniformLocation(shader, "view"), 1, GL_FALSE, view.m);
         glUniformMatrix4fv(glGetUniformLocation(shader, "projection"), 1, GL_FALSE, projection.m);
-        glUniform3f(glGetUniformLocation(shader, "color"), color.x, color.y, color.z);
+        glUniform3f(glGetUniformLocation(shader, "objectColor"), color.x, color.y, color.z);
         
         glBindVertexArray(VAO);
-        glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+        glDrawElements(GL_TRIANGLES, vertexCount, GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
     }
 };
 
-// ============ MODEL LOADER ============
-std::vector<Mesh> LoadModel(const std::string& path) {
+// ============ GLB LOADER USING TINYGLTF ============
+std::vector<Mesh> LoadGLB(const std::string& path, Vec3 defaultColor) {
     std::vector<Mesh> meshes;
-    Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
+    std::string err, warn;
     
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-        std::cerr << "Failed to load: " << path << " - " << importer.GetErrorString() << std::endl;
+    bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, path);
+    if (!ret) {
+        std::cerr << "Failed to load GLB: " << path << std::endl;
+        if (!err.empty()) std::cerr << "Error: " << err << std::endl;
+        if (!warn.empty()) std::cerr << "Warning: " << warn << std::endl;
         return meshes;
     }
     
-    for (unsigned int i = 0; i < scene->mNumMeshes; i++) {
-        aiMesh* mesh = scene->mMeshes[i];
-        Mesh m;
-        m.color = Vec3(1, 1, 1); // Default white
-        m.LoadFromAssimp(mesh);
-        meshes.push_back(m);
-        std::cout << "Loaded mesh " << i << " with " << mesh->mNumVertices << " vertices" << std::endl;
+    std::cout << "✅ Loaded GLB: " << path << std::endl;
+    std::cout << "  Meshes: " << model.meshes.size() << std::endl;
+    
+    for (const auto& gltfMesh : model.meshes) {
+        for (const auto& primitive : gltfMesh.primitives) {
+            Mesh mesh;
+            mesh.color = defaultColor;
+            
+            // Get vertex positions
+            auto posIt = primitive.attributes.find("POSITION");
+            if (posIt != primitive.attributes.end()) {
+                const tinygltf::Accessor& accessor = model.accessors[posIt->second];
+                const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
+                const tinygltf::Buffer& buffer = model.buffers[view.buffer];
+                
+                const float* data = reinterpret_cast<const float*>(
+                    buffer.data.data() + view.byteOffset + accessor.byteOffset
+                );
+                
+                for (size_t i = 0; i < accessor.count; i++) {
+                    mesh.vertices.push_back(data[i * 3 + 0]);
+                    mesh.vertices.push_back(data[i * 3 + 1]);
+                    mesh.vertices.push_back(data[i * 3 + 2]);
+                }
+            }
+            
+            // Get indices
+            if (primitive.indices >= 0) {
+                const tinygltf::Accessor& accessor = model.accessors[primitive.indices];
+                const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
+                const tinygltf::Buffer& buffer = model.buffers[view.buffer];
+                
+                const unsigned char* data = buffer.data.data() + view.byteOffset + accessor.byteOffset;
+                
+                for (size_t i = 0; i < accessor.count; i++) {
+                    unsigned int idx = 0;
+                    if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                        idx = reinterpret_cast<const unsigned short*>(data)[i];
+                    } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+                        idx = reinterpret_cast<const unsigned int*>(data)[i];
+                    }
+                    mesh.indices.push_back(idx);
+                }
+            }
+            
+            if (!mesh.vertices.empty() && !mesh.indices.empty()) {
+                mesh.SetupGL();
+                meshes.push_back(mesh);
+                std::cout << "  Loaded mesh with " << mesh.vertices.size()/3 
+                          << " vertices, " << mesh.indices.size() << " indices" << std::endl;
+            }
+        }
     }
+    
     return meshes;
+}
+
+// ============ CREATE PLACEHOLDER MODELS ============
+Mesh CreatePlaceholderCube(Vec3 color) {
+    Mesh mesh;
+    mesh.color = color;
+    float verts[] = {
+        -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
+         0.5f, 0.5f,-0.5f, -0.5f, 0.5f,-0.5f, -0.5f,-0.5f,-0.5f,
+        -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+         0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
+        -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f, -0.5f,-0.5f,-0.5f,
+        -0.5f,-0.5f,-0.5f, -0.5f,-0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+         0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f,
+         0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
+        -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,
+         0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f, -0.5f,-0.5f,-0.5f,
+        -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,
+         0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f
+    };
+    for (float v : verts) mesh.vertices.push_back(v);
+    for (int i = 0; i < 36; i++) mesh.indices.push_back(i);
+    mesh.SetupGL();
+    return mesh;
+}
+
+Mesh CreatePlaceholderSphere(Vec3 color) {
+    Mesh mesh;
+    mesh.color = color;
+    int stacks = 20, slices = 20;
+    for (int i = 0; i <= stacks; i++) {
+        float V = (float)i / (float)stacks;
+        float phi = V * 3.14159f;
+        for (int j = 0; j <= slices; j++) {
+            float U = (float)j / (float)slices;
+            float theta = U * 2.0f * 3.14159f;
+            mesh.vertices.push_back(sinf(phi) * cosf(theta));
+            mesh.vertices.push_back(cosf(phi));
+            mesh.vertices.push_back(sinf(phi) * sinf(theta));
+        }
+    }
+    for (int i = 0; i < stacks; i++) {
+        for (int j = 0; j < slices; j++) {
+            int first = i * (slices + 1) + j;
+            int second = first + slices + 1;
+            mesh.indices.push_back(first);
+            mesh.indices.push_back(second);
+            mesh.indices.push_back(first + 1);
+            mesh.indices.push_back(second);
+            mesh.indices.push_back(second + 1);
+            mesh.indices.push_back(first + 1);
+        }
+    }
+    mesh.SetupGL();
+    return mesh;
 }
 
 // ============ KEYBOARD/MOUSE ============
@@ -251,6 +335,7 @@ float pitch = -20.0f;
 float distance = 15.0f;
 bool firstMouse = true;
 double lastX, lastY;
+bool showHelp = true;
 
 void MouseCallback(GLFWwindow* window, double xpos, double ypos) {
     if (firstMouse) {
@@ -282,12 +367,20 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, true);
     }
+    if (key == GLFW_KEY_H && action == GLFW_PRESS) {
+        showHelp = !showHelp;
+    }
+    
     // WASD to move target
     float speed = 0.2f;
-    if (key == GLFW_KEY_W && action == GLFW_PRESS) cameraTarget.z -= speed;
-    if (key == GLFW_KEY_S && action == GLFW_PRESS) cameraTarget.z += speed;
-    if (key == GLFW_KEY_A && action == GLFW_PRESS) cameraTarget.x -= speed;
-    if (key == GLFW_KEY_D && action == GLFW_PRESS) cameraTarget.x += speed;
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        if (key == GLFW_KEY_W) cameraTarget.z -= speed;
+        if (key == GLFW_KEY_S) cameraTarget.z += speed;
+        if (key == GLFW_KEY_A) cameraTarget.x -= speed;
+        if (key == GLFW_KEY_D) cameraTarget.x += speed;
+        if (key == GLFW_KEY_Q) cameraTarget.y -= speed;
+        if (key == GLFW_KEY_E) cameraTarget.y += speed;
+    }
 }
 
 // ============ MAIN ============
@@ -303,7 +396,7 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     
     GLFWwindow* window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, 
-                                          "Nationalball - 3D Viewer", NULL, NULL);
+                                          "Nationalball - 3D GLB Viewer", NULL, NULL);
     if (!window) {
         std::cerr << "Failed to create window" << std::endl;
         glfwTerminate();
@@ -325,70 +418,28 @@ int main(int argc, char** argv) {
     // Create shader
     GLuint shader = CreateShaderProgram();
     
-    // Load models
-    std::vector<Mesh> playerMeshes = LoadModel("player.glb");
-    std::vector<Mesh> ballMeshes = LoadModel("ball.glb");
+    // Load GLB models
+    std::vector<Mesh> playerMeshes;
+    std::vector<Mesh> ballMeshes;
     
-    // If no models found, create placeholder
+    std::cout << "Loading player.glb..." << std::endl;
+    playerMeshes = LoadGLB("player.glb", Vec3(0, 1, 0)); // Green
     if (playerMeshes.empty()) {
-        std::cout << "No player.glb found - creating placeholder" << std::endl;
-        Mesh placeholder;
-        float cubeVerts[] = {
-            -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
-             0.5f, 0.5f,-0.5f, -0.5f, 0.5f,-0.5f, -0.5f,-0.5f,-0.5f,
-            -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
-             0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
-            -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f, -0.5f,-0.5f,-0.5f,
-            -0.5f,-0.5f,-0.5f, -0.5f,-0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
-             0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f,  0.5f,-0.5f,-0.5f,
-             0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
-            -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,
-             0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f, -0.5f,-0.5f,-0.5f,
-            -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,
-             0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f
-        };
-        for (float v : cubeVerts) placeholder.vertices.push_back(v);
-        for (int i = 0; i < 36; i++) placeholder.indices.push_back(i);
-        placeholder.color = Vec3(0, 1, 0);
-        placeholder.SetupGL();
-        playerMeshes.push_back(placeholder);
+        std::cout << "⚠️  player.glb not found - using placeholder cube" << std::endl;
+        playerMeshes.push_back(CreatePlaceholderCube(Vec3(0, 1, 0)));
     }
+    
+    std::cout << "Loading ball.glb..." << std::endl;
+    ballMeshes = LoadGLB("ball.glb", Vec3(1, 0.5f, 0)); // Orange
     if (ballMeshes.empty()) {
-        Mesh placeholder;
-        // Simple sphere (20x20)
-        for (int i = 0; i <= 20; i++) {
-            float V = (float)i / 20.0f;
-            float phi = V * 3.14159f;
-            for (int j = 0; j <= 20; j++) {
-                float U = (float)j / 20.0f;
-                float theta = U * 2.0f * 3.14159f;
-                placeholder.vertices.push_back(sinf(phi) * cosf(theta));
-                placeholder.vertices.push_back(cosf(phi));
-                placeholder.vertices.push_back(sinf(phi) * sinf(theta));
-            }
-        }
-        for (int i = 0; i < 20; i++) {
-            for (int j = 0; j < 20; j++) {
-                int first = i * 21 + j;
-                int second = first + 21;
-                placeholder.indices.push_back(first);
-                placeholder.indices.push_back(second);
-                placeholder.indices.push_back(first + 1);
-                placeholder.indices.push_back(second);
-                placeholder.indices.push_back(second + 1);
-                placeholder.indices.push_back(first + 1);
-            }
-        }
-        placeholder.color = Vec3(1, 0.5f, 0);
-        placeholder.SetupGL();
-        ballMeshes.push_back(placeholder);
+        std::cout << "⚠️  ball.glb not found - using placeholder sphere" << std::endl;
+        ballMeshes.push_back(CreatePlaceholderSphere(Vec3(1, 0.5f, 0)));
     }
     
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.1f, 0.15f, 0.2f, 1.0f);
     
-    // UI overlay positions
-    bool showHelp = true;
+    float modelRotation = 0.0f;
     
     while (!glfwWindowShouldClose(window)) {
         // Update camera
@@ -403,34 +454,26 @@ int main(int argc, char** argv) {
                                       (float)SCREEN_WIDTH / SCREEN_HEIGHT, 
                                       0.1f, 100.0f);
         
+        // Auto-rotate models slowly
+        modelRotation += 0.002f;
+        
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        // Draw grid
-        glUseProgram(shader);
-        Mat4 gridModel;
-        glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, gridModel.m);
-        glUniformMatrix4fv(glGetUniformLocation(shader, "view"), 1, GL_FALSE, view.m);
-        glUniformMatrix4fv(glGetUniformLocation(shader, "projection"), 1, GL_FALSE, projection.m);
-        glUniform3f(glGetUniformLocation(shader, "color"), 0.2f, 0.3f, 0.2f);
-        
-        // Simple grid using lines (draw as thin rectangles)
-        for (int i = -20; i <= 20; i++) {
-            // Draw line function using small rectangles
-        }
-        
-        // Draw models
+        // Draw player model (at position -2, 0, 0)
         for (Mesh& m : playerMeshes) {
             Mat4 model = translate(Vec3(-2, 0, 0)) * scale(Vec3(0.5f, 0.5f, 0.5f));
             m.Draw(shader, model, view, projection);
         }
+        
+        // Draw ball model (at position 2, 0, 0)
         for (Mesh& m : ballMeshes) {
             Mat4 model = translate(Vec3(2, 0, 0)) * scale(Vec3(0.3f, 0.3f, 0.3f));
             m.Draw(shader, model, view, projection);
         }
         
-        // Draw help text using OpenGL (simplified - just print to console)
+        // Draw info overlay (simple console for now)
         if (showHelp) {
-            std::cout << "\r[Controls] WASD: move target | Right-click+drag: orbit | Scroll: zoom | ESC: exit    ";
+            std::cout << "\r[Controls] WASD: move | Q/E: up/down | Right-click+drag: orbit | Scroll: zoom | H: toggle help | ESC: exit    ";
             std::cout.flush();
         }
         
