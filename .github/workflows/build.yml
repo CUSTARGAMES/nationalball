@@ -1,4 +1,4 @@
-name: Build Nationalball
+name: Build Nationalball (Windows)
 
 on:
   push:
@@ -9,52 +9,15 @@ on:
     types: [ created ]
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
+  build-windows:
+    runs-on: windows-latest
     
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libx11-dev \
-          libxrandr-dev \
-          libxinerama-dev \
-          libxcursor-dev \
-          libxi-dev \
-          libgl1-mesa-dev \
-          libasound2-dev \
-          libpulse-dev \
-          libudev-dev \
-          g++ \
-          make
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Download Raylib
       run: |
-        wget https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_linux_amd64.tar.gz
-        tar -xzf raylib-5.0_linux_amd64.tar.gz
-        sudo cp -r raylib-5.0_linux_amd64/include/* /usr/local/include/
-        sudo cp -r raylib-5.0_linux_amd64/lib/* /usr/local/lib/
-        sudo ldconfig
-    
-    - name: Build game
-      run: |
-        g++ -O2 -o nationalball nationalball.cpp -lraylib -lm -lGL -lpthread -ldl
-    
-    - name: Upload artifact (Linux)
-      uses: actions/upload-artifact@v3
-      with:
-        name: nationalball-linux
-        path: nationalball
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Download Raylib (Windows)
-      run: |
         Invoke-WebRequest -Uri "https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_win64_msvc16.zip" -OutFile "raylib.zip"
         Expand-Archive -Path raylib.zip -DestinationPath .
         mkdir include
@@ -62,63 +25,12 @@ jobs:
         Copy-Item -Path "raylib-5.0_win64_msvc16\include\*" -Destination "include\" -Recurse
         Copy-Item -Path "raylib-5.0_win64_msvc16\lib\*" -Destination "lib\" -Recurse
     
-    - name: Build game (Windows)
+    - name: Compile game
       run: |
         g++ -O2 -o nationalball.exe nationalball.cpp -Iinclude -Llib -lraylib -lgdi32 -lwinmm
     
-    - name: Upload artifact (Windows)
-      uses: actions/upload-artifact@v3
-      with:
-        name: nationalball-windows
-        path: nationalball.exe
-
-  build-macos:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Install dependencies
-      run: |
-        brew install raylib
-    
-    - name: Build game (macOS)
-      run: |
-        g++ -O2 -o nationalball nationalball.cpp -lraylib -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL
-    
-    - name: Upload artifact (macOS)
-      uses: actions/upload-artifact@v3
-      with:
-  name: Build Nationalball (Windows)
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  release:
-    types: [ created ]
-
-jobs:
-  build-windows:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download Raylib (Windows)
-      run: |
-        Invoke-WebRequest -Uri "https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_win64_msvc16.zip" -OutFile "raylib.zip"
-        Expand-Archive -Path raylib.zip -DestinationPath .
-        mkdir include
-        mkdir lib
-        Copy-Item -Path "raylib-5.0_win64_msvc16\include\*" -Destination "include\" -Recurse
-        Copy-Item -Path "raylib-5.0_win64_msvc16\lib\*" -Destination "lib\" -Recurse
-    
-    - name: Build game
-      run: |
-        g++ -O2 -o nationalball.exe nationalball.cpp -Iinclude -Llib -lraylib -lgdi32 -lwinmm
-    
-    - name: Upload artifact (Windows)
-      uses: actions/upload-artifact@v4  # ✅ Updated to v4
+    - name: Upload executable
+      uses: actions/upload-artifact@v4
       with:
         name: nationalball-windows
         path: nationalball.exe
