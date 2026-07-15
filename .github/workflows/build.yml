@@ -1,4 +1,4 @@
-name: Build Nationalball (OpenGL)
+name: Build Nationalball (Raylib)
 
 on:
   push:
@@ -16,36 +16,27 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Install dependencies
+    - name: Create directories
       run: |
-        choco install mingw make -y
-        echo "C:\mingw64\bin" >> $env:GITHUB_PATH
+        mkdir include
+        mkdir lib
     
-    - name: Download GLFW
+    - name: Download Raylib (MinGW version)
       run: |
-        Invoke-WebRequest -Uri "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip" -OutFile "glfw.zip"
-        Expand-Archive -Path glfw.zip -DestinationPath .
-        Move-Item -Path "glfw-3.4.bin.WIN64\include" -Destination "include" -Force
-        Move-Item -Path "glfw-3.4.bin.WIN64\lib-mingw-w64" -Destination "lib" -Force
+        Invoke-WebRequest -Uri "https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_win64_mingw-w64.zip" -OutFile "raylib.zip"
+        Expand-Archive -Path raylib.zip -DestinationPath .
+        Move-Item -Path "raylib-5.0_win64_mingw-w64\include\*" -Destination "include\" -Force
+        Move-Item -Path "raylib-5.0_win64_mingw-w64\lib\*" -Destination "lib\" -Force
+        echo "Raylib downloaded"
         dir lib
-    
-    - name: Download GLEW
-      run: |
-        Invoke-WebRequest -Uri "https://github.com/nigels-com/glew/releases/download/glew-2.2.0/glew-2.2.0-win32.zip" -OutFile "glew.zip"
-        Expand-Archive -Path glew.zip -DestinationPath .
-        Copy-Item -Path "glew-2.2.0\include\GL\*" -Destination "include\GL\" -Recurse -Force
-        Copy-Item -Path "glew-2.2.0\lib\Release\Win32\*.a" -Destination "lib\" -Force
-    
-    - name: Download GLM
-      run: |
-        Invoke-WebRequest -Uri "https://github.com/g-truc/glm/releases/download/1.0.1/glm-1.0.1-light.zip" -OutFile "glm.zip"
-        Expand-Archive -Path glm.zip -DestinationPath .
-        Copy-Item -Path "glm\glm" -Destination "include\glm" -Recurse -Force
     
     - name: Compile game
       run: |
-        g++ -O2 -o nationalball.exe nationalball.cpp -Iinclude -Llib -lglfw3 -lglew32 -lopengl32 -lgdi32 -lwinmm -static
+        echo "Compiling..."
+        g++ --version
+        g++ -O2 -static -o nationalball.exe nationalball.cpp -Iinclude -Llib -lraylib -lopengl32 -lgdi32 -lwinmm -lpthread -ldl
         echo "Build complete!"
+        dir *.exe
     
     - name: Upload executable
       uses: actions/upload-artifact@v4
