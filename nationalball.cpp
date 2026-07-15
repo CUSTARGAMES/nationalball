@@ -59,6 +59,29 @@ typedef struct {
     float goalTimer;
 } GameState;
 
+// ============ HELPER FUNCTIONS (Raylib doesn't have these) ============
+float Vector3Length(Vector3 v) {
+    return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
+}
+
+Vector3 Vector3Normalize(Vector3 v) {
+    float len = Vector3Length(v);
+    if (len == 0) return (Vector3){0, 0, 0};
+    return (Vector3){v.x/len, v.y/len, v.z/len};
+}
+
+Vector3 Vector3Scale(Vector3 v, float s) {
+    return (Vector3){v.x*s, v.y*s, v.z*s};
+}
+
+Vector3 Vector3Add(Vector3 a, Vector3 b) {
+    return (Vector3){a.x+b.x, a.y+b.y, a.z+b.z};
+}
+
+Vector3 Vector3Subtract(Vector3 a, Vector3 b) {
+    return (Vector3){a.x-b.x, a.y-b.y, a.z-b.z};
+}
+
 // ============ BALL FUNCTIONS ============
 Ball CreateBall(Vector3 pos) {
     Ball b;
@@ -272,9 +295,9 @@ void DrawGoalPosts() {
     DrawCube((Vector3){0, NET_HEIGHT, GOAL_Z}, 
              NET_WIDTH, 0.15f, 0.15f, RED);
     
-    // Back of net (just visual)
-    DrawRectangle3D((Rectangle3D){-NET_WIDTH/2, 0, GOAL_Z-0.5f, NET_WIDTH, NET_HEIGHT, 0}, 
-                    (Color){200, 200, 200, 50});
+    // Back of net (simple rectangle)
+    DrawRectangleV((Vector2){-NET_WIDTH/2, 0}, (Vector2){NET_WIDTH, NET_HEIGHT}, 
+                   (Color){200, 200, 200, 50});
 }
 
 void DrawUI(GameState* state, Shooter* shooter, Ball* ball) {
