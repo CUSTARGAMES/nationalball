@@ -16,18 +16,22 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Download Raylib
+    - name: Download Raylib (MinGW)
       run: |
-        Invoke-WebRequest -Uri "https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_win64_msvc16.zip" -OutFile "raylib.zip"
-        Expand-Archive -Path raylib.zip -DestinationPath .
+        # Download the MinGW-w64 version (not MSVC)
+        Invoke-WebRequest -Uri "https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_win64_mingw-w64.zip" -OutFile "raylib-mingw.zip"
+        Expand-Archive -Path raylib-mingw.zip -DestinationPath .
         mkdir include
         mkdir lib
-        Copy-Item -Path "raylib-5.0_win64_msvc16\include\*" -Destination "include\" -Recurse
-        Copy-Item -Path "raylib-5.0_win64_msvc16\lib\*" -Destination "lib\" -Recurse
+        Copy-Item -Path "raylib-5.0_win64_mingw-w64\include\*" -Destination "include\" -Recurse
+        Copy-Item -Path "raylib-5.0_win64_mingw-w64\lib\*" -Destination "lib\" -Recurse
     
     - name: Compile game
       run: |
-        g++ -O2 -o nationalball.exe nationalball.cpp -Iinclude -Llib -lraylib -lgdi32 -lwinmm
+        echo "Current directory: $(pwd)"
+        echo "Files found:"
+        ls -la *.cpp
+        g++ -O2 -o nationalball.exe nationalball.cpp -Iinclude -Llib -lraylib -lopengl32 -lgdi32 -lwinmm -static
     
     - name: Upload executable
       uses: actions/upload-artifact@v4
