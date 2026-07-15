@@ -1,4 +1,4 @@
-name: Build Nationalball Viewer
+name: Build Nationalball GLB Viewer
 
 on:
   push:
@@ -41,18 +41,16 @@ jobs:
         Copy-Item -Path "glew-2.2.0\include\GL\*" -Destination "include\GL\" -Recurse -Force
         Copy-Item -Path "glew-2.2.0\lib\Release\Win32\*.a" -Destination "lib\" -Force
     
-    - name: Download Assimp
+    - name: Download TinyGLTF
       run: |
-        Invoke-WebRequest -Uri "https://github.com/assimp/assimp/releases/download/v5.3.1/assimp-5.3.1-win64.zip" -OutFile "assimp.zip"
-        Expand-Archive -Path assimp.zip -DestinationPath .
-        Move-Item -Path "assimp-5.3.1-win64\include\assimp" -Destination "include\assimp" -Force
-        Copy-Item -Path "assimp-5.3.1-win64\lib\*.a" -Destination "lib\" -Force
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/syoyo/tinygltf/master/tiny_gltf.h" -OutFile "include\tiny_gltf.h"
+        echo "✅ TinyGLTF downloaded"
     
     - name: Compile viewer
       run: |
-        echo "🔨 Compiling 3D viewer..."
+        echo "🔨 Compiling GLB viewer..."
         g++ --version
-        g++ -O2 -static -o nationalball.exe game.cpp -Iinclude -Llib -lglfw3 -lglew32 -lassimp -lopengl32 -lgdi32 -lwinmm -lpthread -ldl
+        g++ -O2 -static -o nationalball.exe game.cpp -Iinclude -Llib -lglfw3 -lglew32 -lopengl32 -lgdi32 -lwinmm -lpthread -ldl
         echo "✅ Build complete!"
         dir *.exe
     
