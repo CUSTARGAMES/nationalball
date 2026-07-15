@@ -1,245 +1,288 @@
 // nationalball.cpp - Nationalball Open Source Football Game
-// GPL v3 License - Free to use, modify, and share
+// GPL v3 License - Uses OpenGL + GLFW
 
-#include "raylib.h"
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <iostream>
+#include <cmath>
+#include <cstdlib>
+#include <ctime>
+#include <vector>
 
-// ============ CONFIGURATION ============
 #define SCREEN_WIDTH 1024
 #define SCREEN_HEIGHT 768
+#define BALL_RADIUS 0.3f
+#define MAX_POWER 20.0f
 #define NET_ROWS 10
 #define NET_COLS 8
 #define NET_WIDTH 5.0f
 #define NET_HEIGHT 3.0f
 #define GOAL_Z -12.0f
-#define BALL_RADIUS 0.3f
-#define MAX_POWER 20.0f
 #define ARENA_SIZE 20.0f
 
+// ============ MATH HELPERS ============
+struct Vector3 {
+    float x, y, z;
+    Vector3() : x(0), y(0), z(0) {}
+    Vector3(float x, float y, float z) : x(x), y(y), z(z) {}
+};
+
+Vector3 operator+(const Vector3& a, const Vector3& b) {
+    return Vector3(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+Vector3 operator-(const Vector3& a, const Vector3& b) {
+    return Vector3(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+Vector3 operator*(const Vector3& v, float s) {
+    return Vector3(v.x * s, v.y * s, v.z * s);
+}
+float length(const Vector3& v) {
+    return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
+}
+Vector3 normalize(const Vector3& v) {
+    float len = length(v);
+    if (len < 0.0001f) return Vector3(0, 0, 0);
+    return Vector3(v.x/len, v.y/len, v.z/len);
+}
+
 // ============ STRUCTURES ============
-typedef struct {
+struct Ball {
     Vector3 position;
     Vector3 velocity;
     float radius;
-    float mass;
-    float friction;
-    float bounce;
     bool isGrounded;
     bool isScored;
-} Ball;
+    float friction;
+    float bounce;
+};
 
-typedef struct {
+struct NetPoint {
     Vector3 position;
     Vector3 restPosition;
     Vector3 velocity;
     bool isFixed;
-} NetPoint;
+};
 
-typedef struct {
+struct Net {
     NetPoint points[NET_ROWS][NET_COLS];
     float springConstant;
     float damping;
     bool ballCaught;
-} Net;
+};
 
-typedef struct {
-    Vector3 position;
-    float power;
-    bool isCharging;
-    bool isClicked;
-} Shooter;
-
-typedef struct {
+struct GameState {
     int score;
     int attempts;
-    float time;
     bool isGoal;
     float goalTimer;
-} GameState;
+    float power;
+    bool isCharging;
+};
 
-// ============ HELPER FUNCTIONS (Raylib doesn't have these) ============
-float Vector3Length(Vector3 v) {
-    return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
+// ============ GLOBAL VARIABLES ============
+Ball ball;
+Net net;
+GameState state;
+GLuint shaderProgram;
+GLuint vao, vbo;
+
+// ============ SHADER SOURCES ============
+const char* vertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+void main() {
+    gl_Position = projection * view * model * vec4(aPos, 1.0);
+}
+)";
+
+const char* fragmentShaderSource = R"(
+#version 330 core
+uniform vec3 color;
+out vec4 FragColor;
+void main() {
+    FragColor = vec4(color, 1.0);
+}
+)";
+
+// ============ SHADER COMPILATION ============
+GLuint CompileShader(const char* source, GLenum type) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    
+    GLint success;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetShaderInfoLog(shader, 512, NULL, infoLog);
+        std::cerr << "Shader compilation failed: " << infoLog << std::endl;
+    }
+    return shader;
 }
 
-Vector3 Vector3Normalize(Vector3 v) {
-    float len = Vector3Length(v);
-    if (len == 0) return (Vector3){0, 0, 0};
-    return (Vector3){v.x/len, v.y/len, v.z/len};
-}
-
-Vector3 Vector3Scale(Vector3 v, float s) {
-    return (Vector3){v.x*s, v.y*s, v.z*s};
-}
-
-Vector3 Vector3Add(Vector3 a, Vector3 b) {
-    return (Vector3){a.x+b.x, a.y+b.y, a.z+b.z};
-}
-
-Vector3 Vector3Subtract(Vector3 a, Vector3 b) {
-    return (Vector3){a.x-b.x, a.y-b.y, a.z-b.z};
+GLuint CreateShaderProgram() {
+    GLuint vertex = CompileShader(vertexShaderSource, GL_VERTEX_SHADER);
+    GLuint fragment = CompileShader(fragmentShaderSource, GL_FRAGMENT_SHADER);
+    
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glLinkProgram(program);
+    
+    GLint success;
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetProgramInfoLog(program, 512, NULL, infoLog);
+        std::cerr << "Program linking failed: " << infoLog << std::endl;
+    }
+    
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    return program;
 }
 
 // ============ BALL FUNCTIONS ============
-Ball CreateBall(Vector3 pos) {
-    Ball b;
-    b.position = pos;
-    b.velocity = (Vector3){0, 0, 0};
-    b.radius = BALL_RADIUS;
-    b.mass = 1.0f;
-    b.friction = 0.985f;
-    b.bounce = 0.6f;
-    b.isGrounded = true;
-    b.isScored = false;
-    return b;
+void InitBall() {
+    ball.position = Vector3(0, BALL_RADIUS, 0);
+    ball.velocity = Vector3(0, 0, 0);
+    ball.radius = BALL_RADIUS;
+    ball.isGrounded = true;
+    ball.isScored = false;
+    ball.friction = 0.985f;
+    ball.bounce = 0.6f;
 }
 
-void UpdateBall(Ball* b, float dt) {
-    if (b->isScored) return;
+void UpdateBall(float dt) {
+    if (ball.isScored) return;
     
-    // Gravity
-    if (!b->isGrounded) {
-        b->velocity.y -= 9.8f * dt;
+    if (!ball.isGrounded) {
+        ball.velocity.y -= 9.8f * dt;
     }
     
-    // Friction
-    b->velocity.x *= powf(b->friction, dt * 10);
-    b->velocity.z *= powf(b->friction, dt * 10);
+    ball.velocity.x *= powf(ball.friction, dt * 10);
+    ball.velocity.z *= powf(ball.friction, dt * 10);
     
-    // Update position
-    b->position.x += b->velocity.x * dt;
-    b->position.y += b->velocity.y * dt;
-    b->position.z += b->velocity.z * dt;
+    ball.position.x += ball.velocity.x * dt;
+    ball.position.y += ball.velocity.y * dt;
+    ball.position.z += ball.velocity.z * dt;
     
-    // Ground collision
-    if (b->position.y < b->radius) {
-        b->position.y = b->radius;
-        b->velocity.y *= -b->bounce;
-        b->isGrounded = true;
-        if (fabs(b->velocity.y) < 0.1f) b->velocity.y = 0;
+    if (ball.position.y < ball.radius) {
+        ball.position.y = ball.radius;
+        ball.velocity.y *= -ball.bounce;
+        ball.isGrounded = true;
+        if (fabs(ball.velocity.y) < 0.1f) ball.velocity.y = 0;
     } else {
-        b->isGrounded = false;
+        ball.isGrounded = false;
     }
     
-    // Arena walls
-    if (fabs(b->position.x) > ARENA_SIZE) {
-        b->position.x = (b->position.x > 0) ? ARENA_SIZE : -ARENA_SIZE;
-        b->velocity.x *= -b->bounce;
+    if (fabs(ball.position.x) > ARENA_SIZE) {
+        ball.position.x = (ball.position.x > 0) ? ARENA_SIZE : -ARENA_SIZE;
+        ball.velocity.x *= -ball.bounce;
     }
-    if (fabs(b->position.z) > ARENA_SIZE) {
-        b->position.z = (b->position.z > 0) ? ARENA_SIZE : -ARENA_SIZE;
-        b->velocity.z *= -b->bounce;
+    if (fabs(ball.position.z) > ARENA_SIZE) {
+        ball.position.z = (ball.position.z > 0) ? ARENA_SIZE : -ARENA_SIZE;
+        ball.velocity.z *= -ball.bounce;
     }
     
-    // Stop if nearly still
-    if (Vector3Length(b->velocity) < 0.01f) {
-        b->velocity = (Vector3){0, 0, 0};
+    if (length(ball.velocity) < 0.01f) {
+        ball.velocity = Vector3(0, 0, 0);
     }
 }
 
-void ShootBall(Ball* b, Vector3 direction, float power) {
-    if (b->isScored) return;
-    b->velocity.x = direction.x * power;
-    b->velocity.y = direction.y * power + 2.0f;
-    b->velocity.z = direction.z * power;
-    b->isGrounded = false;
+void ShootBall(Vector3 direction, float power) {
+    if (ball.isScored) return;
+    ball.velocity.x = direction.x * power;
+    ball.velocity.y = direction.y * power + 2.0f;
+    ball.velocity.z = direction.z * power;
+    ball.isGrounded = false;
 }
 
-void ResetBall(Ball* b) {
-    b->position = (Vector3){0, BALL_RADIUS, 0};
-    b->velocity = (Vector3){0, 0, 0};
-    b->isGrounded = true;
-    b->isScored = false;
+void ResetBall() {
+    ball.position = Vector3(0, BALL_RADIUS, 0);
+    ball.velocity = Vector3(0, 0, 0);
+    ball.isGrounded = true;
+    ball.isScored = false;
 }
 
 // ============ NET FUNCTIONS ============
-Net CreateNet(Vector3 center) {
-    Net net;
+void InitNet() {
     net.springConstant = 60.0f;
     net.damping = 0.85f;
     net.ballCaught = false;
     
+    Vector3 center(0, 1.5f, GOAL_Z);
     for (int row = 0; row < NET_ROWS; row++) {
         for (int col = 0; col < NET_COLS; col++) {
             float x = (float)col / (NET_COLS - 1) * NET_WIDTH - NET_WIDTH/2;
             float y = (float)row / (NET_ROWS - 1) * NET_HEIGHT;
             
-            net.points[row][col].restPosition = (Vector3){
+            net.points[row][col].restPosition = Vector3(
                 center.x + x,
                 center.y + y,
                 center.z
-            };
+            );
             net.points[row][col].position = net.points[row][col].restPosition;
-            net.points[row][col].velocity = (Vector3){0, 0, 0};
+            net.points[row][col].velocity = Vector3(0, 0, 0);
             
             bool isEdge = (row == 0 || row == NET_ROWS-1 || 
                           col == 0 || col == NET_COLS-1);
             net.points[row][col].isFixed = isEdge;
         }
     }
-    return net;
 }
 
-void UpdateNet(Net* net, Ball* ball, float dt) {
-    net->ballCaught = false;
+void UpdateNet(float dt) {
+    net.ballCaught = false;
     
     for (int row = 1; row < NET_ROWS-1; row++) {
         for (int col = 1; col < NET_COLS-1; col++) {
-            NetPoint* p = &net->points[row][col];
+            NetPoint* p = &net.points[row][col];
             if (p->isFixed) continue;
             
-            // Ball-net collision
-            Vector3 diff = Vector3Subtract(ball->position, p->position);
-            float dist = Vector3Length(diff);
+            Vector3 diff = ball.position - p->position;
+            float dist = length(diff);
             
-            if (dist < ball->radius + 0.3f && !ball->isScored) {
-                Vector3 pushDir = Vector3Normalize(diff);
-                float pushForce = 3.0f * (ball->radius + 0.3f - dist);
-                p->position = Vector3Add(p->position, 
-                                         Vector3Scale(pushDir, pushForce));
+            if (dist < ball.radius + 0.3f && !ball.isScored) {
+                Vector3 pushDir = normalize(diff);
+                float pushForce = 3.0f * (ball.radius + 0.3f - dist);
+                p->position = p->position + pushDir * pushForce;
                 
-                // Slow ball
-                ball->velocity = Vector3Scale(ball->velocity, 0.2f);
-                ball->position = Vector3Add(ball->position,
-                    Vector3Scale(pushDir, 0.05f));
-                
-                net->ballCaught = true;
+                ball.velocity = ball.velocity * 0.2f;
+                ball.position = ball.position + pushDir * 0.05f;
+                net.ballCaught = true;
             }
             
-            // Spring force
-            Vector3 displacement = Vector3Subtract(p->position, p->restPosition);
-            Vector3 springForce = Vector3Scale(displacement, -net->springConstant);
+            Vector3 displacement = p->position - p->restPosition;
+            Vector3 springForce = displacement * (-net.springConstant);
+            Vector3 dampingForce = p->velocity * (-net.damping);
             
-            // Damping
-            Vector3 dampingForce = Vector3Scale(p->velocity, -net->damping);
+            Vector3 acceleration = springForce + dampingForce;
+            p->velocity = p->velocity + acceleration * dt;
+            p->position = p->position + p->velocity * dt;
             
-            // Apply forces
-            Vector3 acceleration = Vector3Add(springForce, dampingForce);
-            p->velocity = Vector3Add(p->velocity, Vector3Scale(acceleration, dt));
-            p->position = Vector3Add(p->position, Vector3Scale(p->velocity, dt));
-            
-            // Clamp to prevent explosion
             float maxDist = 1.0f;
-            if (Vector3Length(displacement) > maxDist) {
-                p->position = Vector3Add(p->restPosition, 
-                                         Vector3Scale(Vector3Normalize(displacement), maxDist));
+            if (length(displacement) > maxDist) {
+                p->position = p->restPosition + normalize(displacement) * maxDist;
             }
         }
     }
 }
 
-bool CheckGoal(Ball* ball, Net* net) {
-    if (ball->isScored) return false;
+bool CheckGoal() {
+    if (ball.isScored) return false;
     
-    Vector3 netCenter = net->points[NET_ROWS/2][NET_COLS/2].restPosition;
+    Vector3 netCenter = net.points[NET_ROWS/2][NET_COLS/2].restPosition;
     
-    // Ball must cross net plane
-    if (ball->position.z < netCenter.z - 0.5f) {
-        // Inside goal posts
-        if (fabs(ball->position.x) < NET_WIDTH/2 - 0.3f) {
-            if (ball->position.y < NET_HEIGHT - 0.3f) {
+    if (ball.position.z < netCenter.z - 0.5f) {
+        if (fabs(ball.position.x) < NET_WIDTH/2 - 0.3f) {
+            if (ball.position.y < NET_HEIGHT - 0.3f) {
                 return true;
             }
         }
@@ -247,173 +290,160 @@ bool CheckGoal(Ball* ball, Net* net) {
     return false;
 }
 
-// ============ GAME FUNCTIONS ============
-void DrawPitch() {
-    // Ground
-    DrawPlane((Vector3){0, 0, 0}, (Vector2){40, 30}, (Color){34, 139, 34, 255});
+// ============ DRAWING FUNCTIONS ============
+void DrawSphere(Vector3 pos, float radius, Vector3 color) {
+    glUseProgram(shaderProgram);
     
-    // Center circle
-    DrawCircle3D((Vector3){0, 0.05f, 0}, 3.0f, (Vector3){1, 0, 0}, 90, WHITE);
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
+    model = glm::scale(model, glm::vec3(radius, radius, radius));
     
-    // Center line
-    DrawLine3D((Vector3){0, 0.05f, -15}, (Vector3){0, 0.05f, 15}, WHITE);
+    GLuint modelLoc = glGetUniformLocation(shaderProgram, "model");
+    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+    glUniform3f(glGetUniformLocation(shaderProgram, "color"), color.x, color.y, color.z);
     
-    // Goal area
-    DrawLine3D((Vector3){-4, 0.05f, -15}, (Vector3){4, 0.05f, -15}, WHITE);
-    DrawLine3D((Vector3){-4, 0.05f, -12}, (Vector3){-4, 0.05f, -15}, WHITE);
-    DrawLine3D((Vector3){4, 0.05f, -12}, (Vector3){4, 0.05f, -15}, WHITE);
+    // Draw a sphere using icosahedron approximation
+    // For simplicity, we'll draw a cube (you can add sphere mesh later)
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
-void DrawNet(Net* net) {
-    for (int row = 0; row < NET_ROWS; row++) {
-        for (int col = 0; col < NET_COLS; col++) {
-            NetPoint p = net->points[row][col];
-            
-            Color netColor = (row == 0 || row == NET_ROWS-1 || 
-                             col == 0 || col == NET_COLS-1) ? RED : WHITE;
-            
-            // Horizontal connections
-            if (col < NET_COLS - 1) {
-                DrawLine3D(p.position, net->points[row][col+1].position, netColor);
-            }
-            // Vertical connections
-            if (row < NET_ROWS - 1) {
-                DrawLine3D(p.position, net->points[row+1][col].position, netColor);
-            }
-        }
+void DrawLine(Vector3 start, Vector3 end, Vector3 color) {
+    // Simple line drawing with GL_LINES
+    // We'll implement this later
+}
+
+void DrawUI(float power) {
+    // UI will be drawn with OpenGL overlays or a library like ImGui
+}
+
+// ============ CAMERA ============
+glm::mat4 GetViewMatrix() {
+    glm::vec3 cameraPos(12.0f, 8.0f, 8.0f);
+    glm::vec3 cameraTarget(0, 1.0f, -3.0f);
+    glm::vec3 up(0, 1.0f, 0);
+    return glm::lookAt(cameraPos, cameraTarget, up);
+}
+
+glm::mat4 GetProjectionMatrix() {
+    return glm::perspective(glm::radians(50.0f), 
+                            (float)SCREEN_WIDTH / SCREEN_HEIGHT, 
+                            0.1f, 100.0f);
+}
+
+// ============ KEYBOARD/MOUSE ============
+void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        ResetBall();
+        state.isGoal = false;
     }
 }
 
-void DrawGoalPosts() {
-    // Posts
-    DrawCube((Vector3){-NET_WIDTH/2, NET_HEIGHT/2, GOAL_Z}, 
-             0.15f, NET_HEIGHT, 0.15f, RED);
-    DrawCube((Vector3){ NET_WIDTH/2, NET_HEIGHT/2, GOAL_Z}, 
-             0.15f, NET_HEIGHT, 0.15f, RED);
-    
-    // Crossbar
-    DrawCube((Vector3){0, NET_HEIGHT, GOAL_Z}, 
-             NET_WIDTH, 0.15f, 0.15f, RED);
-    
-    // Back of net (simple rectangle)
-    DrawRectangleV((Vector2){-NET_WIDTH/2, 0}, (Vector2){NET_WIDTH, NET_HEIGHT}, 
-                   (Color){200, 200, 200, 50});
-}
-
-void DrawUI(GameState* state, Shooter* shooter, Ball* ball) {
-    // Score
-    DrawText(TextFormat("SCORE: %d", state->score), 10, 10, 30, GOLD);
-    DrawText(TextFormat("Attempts: %d", state->attempts), 10, 50, 20, WHITE);
-    
-    // Power bar
-    if (shooter->isCharging) {
-        DrawRectangle(10, 100, 30, 200, (Color){50, 50, 50, 200});
-        float powerHeight = (shooter->power / MAX_POWER) * 200;
-        DrawRectangle(10, 300 - powerHeight, 30, powerHeight, RED);
-        DrawText(TextFormat("%.0f%%", shooter->power/MAX_POWER*100), 
-                 10, 310, 15, WHITE);
-    }
-    
-    // Instructions
-    DrawText("Click on ball to shoot!", 10, 400, 20, WHITE);
-    DrawText("Hold click for power", 10, 430, 15, (Color){200, 200, 200, 200});
-    DrawText("Press R to reset ball", 10, 460, 15, (Color){200, 200, 200, 200});
-    
-    // Ball info
-    float speed = Vector3Length(ball->velocity);
-    DrawText(TextFormat("Ball speed: %.1f", speed), 10, 500, 15, 
-             speed > 5 ? GREEN : WHITE);
-    
-    if (state->isGoal) {
-        DrawText("GOAL!", SCREEN_WIDTH/2 - 100, SCREEN_HEIGHT/2 - 50, 80, GOLD);
-        DrawText("+1 POINT!", SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 + 30, 40, WHITE);
-    }
-}
-
-// ============ MAIN GAME ============
-int main() {
-    // Window
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Nationalball - Open Source Football");
-    
-    // Camera
-    Camera3D camera = { 0 };
-    camera.position = (Vector3){12.0f, 8.0f, 8.0f};
-    camera.target = (Vector3){0, 1.0f, -3.0f};
-    camera.up = (Vector3){0, 1.0f, 0};
-    camera.fovy = 50.0f;
-    
-    // Game objects
-    Ball ball = CreateBall((Vector3){0, BALL_RADIUS, 0});
-    Net net = CreateNet((Vector3){0, 1.5f, GOAL_Z});
-    GameState state = {0, 0, 0, false, 0};
-    Shooter shooter = {{0}, 0, false, false};
-    
-    SetTargetFPS(60);
-    
-    // Main loop
-    while (!WindowShouldClose()) {
-        float dt = GetFrameTime();
-        
-        // ============ INPUT ============
-        // Camera controls
-        if (IsKeyDown(KEY_LEFT)) camera.position.x -= 5.0f * dt;
-        if (IsKeyDown(KEY_RIGHT)) camera.position.x += 5.0f * dt;
-        if (IsKeyDown(KEY_UP)) camera.position.z += 5.0f * dt;
-        if (IsKeyDown(KEY_DOWN)) camera.position.z -= 5.0f * dt;
-        
-        // Reset ball
-        if (IsKeyPressed(KEY_R)) {
-            ResetBall(&ball);
-            state.isGoal = false;
-        }
-        
-        // Shooting
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-            Ray ray = GetMouseRay(GetMousePosition(), camera);
-            RayCollision collision = GetRayCollisionSphere(ray, ball.position, ball.radius);
+void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        if (action == GLFW_PRESS) {
+            // Get mouse position and check if clicking on ball
+            double xpos, ypos;
+            glfwGetCursorPos(window, &xpos, &ypos);
             
-            if (collision.hit && !ball.isScored) {
-                shooter.isClicked = true;
-                shooter.isCharging = true;
-                shooter.power = 0;
-            }
-        }
-        
-        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && shooter.isCharging) {
-            shooter.power += dt * 15.0f;
-            if (shooter.power > MAX_POWER) shooter.power = MAX_POWER;
-        }
-        
-        if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && shooter.isCharging) {
-            if (shooter.power > 1.0f) {
-                // Shoot toward goal
-                Vector3 goalCenter = (Vector3){0, 1.5f, GOAL_Z - 1.0f};
-                Vector3 direction = Vector3Normalize(
-                    Vector3Subtract(goalCenter, ball.position)
-                );
-                // Add slight random deviation for realism
+            // Simple click detection (you can implement proper ray picking)
+            state.isCharging = true;
+            state.power = 0;
+        } else if (action == GLFW_RELEASE && state.isCharging) {
+            if (state.power > 1.0f) {
+                Vector3 goalCenter(0, 1.5f, GOAL_Z - 1.0f);
+                Vector3 direction = normalize(goalCenter - ball.position);
                 direction.x += (rand() % 100 - 50) / 1000.0f;
                 direction.y += (rand() % 100 - 50) / 1000.0f;
-                direction = Vector3Normalize(direction);
+                direction = normalize(direction);
                 
-                ShootBall(&ball, direction, shooter.power);
+                ShootBall(direction, state.power);
                 state.attempts++;
-                shooter.isCharging = false;
-                shooter.isClicked = false;
-                shooter.power = 0;
-            } else {
-                shooter.isCharging = false;
-                shooter.isClicked = false;
-                shooter.power = 0;
             }
+            state.isCharging = false;
+            state.power = 0;
+        }
+    }
+}
+
+// ============ MAIN ============
+int main() {
+    srand(time(NULL));
+    
+    // Initialize GLFW
+    if (!glfwInit()) {
+        std::cerr << "Failed to initialize GLFW" << std::endl;
+        return -1;
+    }
+    
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    
+    GLFWwindow* window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, 
+                                          "Nationalball - OpenGL", NULL, NULL);
+    if (!window) {
+        std::cerr << "Failed to create window" << std::endl;
+        glfwTerminate();
+        return -1;
+    }
+    
+    glfwMakeContextCurrent(window);
+    glfwSetKeyCallback(window, KeyCallback);
+    glfwSetMouseButtonCallback(window, MouseButtonCallback);
+    
+    // Initialize GLEW
+    glewExperimental = GL_TRUE;
+    if (glewInit() != GLEW_OK) {
+        std::cerr << "Failed to initialize GLEW" << std::endl;
+        return -1;
+    }
+    
+    // Create shader program
+    shaderProgram = CreateShaderProgram();
+    
+    // Create a simple cube VAO (for testing)
+    float vertices[] = {
+        -0.5f, -0.5f, -0.5f,  0.5f, -0.5f, -0.5f,  0.5f,  0.5f, -0.5f,
+        0.5f,  0.5f, -0.5f, -0.5f,  0.5f, -0.5f, -0.5f, -0.5f, -0.5f,
+        // Add more faces...
+    };
+    // Simplified: just set up basic VAO
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    
+    // Initialize game
+    InitBall();
+    InitNet();
+    state.score = 0;
+    state.attempts = 0;
+    state.isGoal = false;
+    state.goalTimer = 0;
+    state.power = 0;
+    state.isCharging = false;
+    
+    glEnable(GL_DEPTH_TEST);
+    glClearColor(0.08f, 0.12f, 0.16f, 1.0f);
+    
+    // Main loop
+    while (!glfwWindowShouldClose(window)) {
+        float dt = 0.016f; // Fixed timestep for simplicity
+        
+        // Update
+        UpdateBall(dt);
+        UpdateNet(dt);
+        
+        if (state.isCharging) {
+            state.power += dt * 15.0f;
+            if (state.power > MAX_POWER) state.power = MAX_POWER;
         }
         
-        // ============ UPDATE ============
-        UpdateBall(&ball, dt);
-        UpdateNet(&net, &ball, dt);
-        
-        // Goal check
-        if (CheckGoal(&ball, &net) && !state.isGoal) {
+        if (CheckGoal() && !state.isGoal) {
             state.score++;
             state.isGoal = true;
             state.goalTimer = 2.0f;
@@ -424,40 +454,58 @@ int main() {
             state.goalTimer -= dt;
             if (state.goalTimer <= 0) {
                 state.isGoal = false;
-                ResetBall(&ball);
+                ResetBall();
             }
         }
         
-        // ============ DRAW ============
-        BeginDrawing();
-        ClearBackground((Color){20, 30, 40, 255});
+        // Render
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        BeginMode3D(camera);
+        // Set view and projection matrices
+        glm::mat4 view = GetViewMatrix();
+        glm::mat4 projection = GetProjectionMatrix();
         
-        DrawPitch();
-        DrawNet(&net);
-        DrawGoalPosts();
+        glUseProgram(shaderProgram);
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 
+                           1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 
+                           1, GL_FALSE, glm::value_ptr(projection));
         
-        // Draw ball with glow
+        // Draw ball
         DrawSphere(ball.position, ball.radius, 
-                   ball.isScored ? GOLD : ORANGE);
-        DrawSphereWires(ball.position, ball.radius + 0.1f, 16, 16, 
-                        ball.isScored ? GOLD : (Color){255, 165, 0, 100});
+                   ball.isScored ? Vector3(1, 0.84f, 0) : Vector3(1, 0.5f, 0));
         
-        EndMode3D();
+        // Draw net (placeholder - you'll need proper drawing)
+        for (int row = 0; row < NET_ROWS; row++) {
+            for (int col = 0; col < NET_COLS; col++) {
+                // Draw net points as small spheres
+                NetPoint p = net.points[row][col];
+                Vector3 color = (row == 0 || row == NET_ROWS-1 || 
+                                col == 0 || col == NET_COLS-1) ? 
+                                Vector3(1, 0, 0) : Vector3(1, 1, 1);
+                DrawSphere(p.position, 0.05f, color);
+            }
+        }
         
-        // UI
-        DrawUI(&state, &shooter, &ball);
+        // Draw UI
+        std::cout << "Score: " << state.score << " | Attempts: " << state.attempts;
+        if (state.isCharging) {
+            std::cout << " | Power: " << (int)(state.power/MAX_POWER * 100) << "%";
+        }
+        if (state.isGoal) {
+            std::cout << " | GOAL!";
+        }
+        std::cout << std::endl;
         
-        // Open source badge
-        DrawText("GPL v3 - Open Source", SCREEN_WIDTH - 250, SCREEN_HEIGHT - 30, 15, 
-                 (Color){100, 100, 100, 150});
-        DrawText("github.com/yourname/nationalball", SCREEN_WIDTH - 250, SCREEN_HEIGHT - 10, 15, 
-                 (Color){100, 100, 100, 150});
-        
-        EndDrawing();
+        glfwSwapBuffers(window);
+        glfwPollEvents();
     }
     
-    CloseWindow();
+    // Cleanup
+    glDeleteVertexArrays(1, &vao);
+    glDeleteBuffers(1, &vbo);
+    glDeleteProgram(shaderProgram);
+    glfwDestroyWindow(window);
+    glfwTerminate();
     return 0;
 }
