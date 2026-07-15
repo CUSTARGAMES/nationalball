@@ -1,4 +1,4 @@
-name: Build Nationalball (Simple OpenGL)
+name: Build Nationalball Viewer
 
 on:
   push:
@@ -18,13 +18,13 @@ jobs:
     
     - name: Create directories
       run: |
-        mkdir include
-        mkdir lib
+        mkdir include -Force
+        mkdir lib -Force
     
     - name: Install MinGW
       run: |
         choco install mingw -y
-        echo "C:\mingw64\bin" >> $env:GITHUB_PATH
+        echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $env:GITHUB_PATH
     
     - name: Download GLFW
       run: |
@@ -32,21 +32,28 @@ jobs:
         Expand-Archive -Path glfw.zip -DestinationPath .
         Move-Item -Path "glfw-3.4.bin.WIN64\include\*" -Destination "include\" -Force
         Copy-Item -Path "glfw-3.4.bin.WIN64\lib-mingw-w64\*.a" -Destination "lib\" -Force
-        echo "GLFW downloaded"
     
-    - name: Download GLM
+    - name: Download GLEW
       run: |
-        Invoke-WebRequest -Uri "https://github.com/g-truc/glm/releases/download/1.0.1/glm-1.0.1-light.zip" -OutFile "glm.zip"
-        Expand-Archive -Path glm.zip -DestinationPath .
-        Move-Item -Path "glm\glm" -Destination "include\glm" -Force
-        echo "GLM downloaded"
+        Invoke-WebRequest -Uri "https://github.com/nigels-com/glew/releases/download/glew-2.2.0/glew-2.2.0-win32.zip" -OutFile "glew.zip"
+        Expand-Archive -Path glew.zip -DestinationPath .
+        New-Item -ItemType Directory -Path "include\GL" -Force
+        Copy-Item -Path "glew-2.2.0\include\GL\*" -Destination "include\GL\" -Recurse -Force
+        Copy-Item -Path "glew-2.2.0\lib\Release\Win32\*.a" -Destination "lib\" -Force
     
-    - name: Compile game (no GLEW)
+    - name: Download Assimp
       run: |
-        echo "Compiling with OpenGL + GLFW..."
+        Invoke-WebRequest -Uri "https://github.com/assimp/assimp/releases/download/v5.3.1/assimp-5.3.1-win64.zip" -OutFile "assimp.zip"
+        Expand-Archive -Path assimp.zip -DestinationPath .
+        Move-Item -Path "assimp-5.3.1-win64\include\assimp" -Destination "include\assimp" -Force
+        Copy-Item -Path "assimp-5.3.1-win64\lib\*.a" -Destination "lib\" -Force
+    
+    - name: Compile viewer
+      run: |
+        echo "🔨 Compiling 3D viewer..."
         g++ --version
-        g++ -O2 -static -o nationalball.exe nationalball.cpp -Iinclude -Llib -lglfw3 -lopengl32 -lgdi32 -lwinmm -lpthread -ldl
-        echo "Build complete!"
+        g++ -O2 -static -o nationalball.exe game.cpp -Iinclude -Llib -lglfw3 -lglew32 -lassimp -lopengl32 -lgdi32 -lwinmm -lpthread -ldl
+        echo "✅ Build complete!"
         dir *.exe
     
     - name: Upload executable
