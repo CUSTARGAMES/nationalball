@@ -20,6 +20,7 @@ jobs:
       run: |
         mkdir include -Force
         mkdir lib -Force
+        mkdir include\GL -Force
     
     - name: Install MinGW
       run: |
@@ -32,21 +33,23 @@ jobs:
         Expand-Archive -Path glfw.zip -DestinationPath .
         Move-Item -Path "glfw-3.4.bin.WIN64\include\*" -Destination "include\" -Force
         Copy-Item -Path "glfw-3.4.bin.WIN64\lib-mingw-w64\*.a" -Destination "lib\" -Force
+        echo "✅ GLFW downloaded"
     
     - name: Download GLEW
       run: |
         Invoke-WebRequest -Uri "https://github.com/nigels-com/glew/releases/download/glew-2.2.0/glew-2.2.0-win32.zip" -OutFile "glew.zip"
         Expand-Archive -Path glew.zip -DestinationPath .
-        New-Item -ItemType Directory -Path "include\GL" -Force
         Copy-Item -Path "glew-2.2.0\include\GL\*" -Destination "include\GL\" -Recurse -Force
         Copy-Item -Path "glew-2.2.0\lib\Release\Win32\*.a" -Destination "lib\" -Force
+        echo "✅ GLEW downloaded"
     
-    - name: Download TinyGLTF
+    - name: Download TinyGLTF and json.hpp
       run: |
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/syoyo/tinygltf/master/tiny_gltf.h" -OutFile "include\tiny_gltf.h"
-        echo "✅ TinyGLTF downloaded"
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/nlohmann/json/develop/single_include/nlohmann/json.hpp" -OutFile "include\json.hpp"
+        echo "✅ TinyGLTF and json.hpp downloaded"
     
-    - name: Compile viewer
+    - name: Compile game
       run: |
         echo "🔨 Compiling GLB viewer..."
         g++ --version
